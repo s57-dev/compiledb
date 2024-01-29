@@ -24,11 +24,45 @@ import click
 import os
 import sys
 import logging
+import tempfile
+import re
 
 from . import generate
 from .commands import make
 
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help'])
+
+def replace_cat_contents_and_remove_patterns(original_file):
+    """Replace `\$(cat somepath)` patterns and remove specific strings from each line.
+       Cleanup function for AOSP builds
+    """
+
+    content =  original_file.read()
+
+    # Regular expression to find all `\$(cat somepath)` patterns
+    pattern_cat = r'\\\$\((cat\s+([^\)]+))\)'
+    matches = re.finditer(pattern_cat, content)
+
+    for match in matches:
+        cat_command, path = match.groups()
+        file_content = open(path).read()
+        file_content_no_newlines = file_content.replace('\n', '')
+        content = content.replace('\\$(%s)' % cat_command, file_content_no_newlines)
+
+    # Regular expression to remove specific patterns from the beginning of each line and trailing `"`
+    pattern_remove = r'^\[.*?\]\s*/bin/bash\s+-c\s+"PWD=(.+)"$'
+
+    content = '\n'.join(re.sub(pattern_remove, r'\1', line) for line in content.split('\n'))
+    f = tempfile.NamedTemporaryFile(mode="w")
+
+
+    out = open(f.name, "w")
+
+    out.write(content)
+    out.close()
+    print(f.name)
+    return open(f.name, 'r');
+
 
 
 class Options(object):
@@ -87,6 +121,9 @@ def cli(ctx, infile, outfile, build_dir, exclude_files, no_build, verbose, overw
        its corresponding Compilation database."""
     log_level = logging.DEBUG if verbose else logging.ERROR
     logging.basicConfig(level=log_level, format=None)
+
+    infile = replace_cat_contents_and_remove_patterns(infile)
+
     if ctx.invoked_subcommand is None:
         done = generate(infile, outfile, build_dir, exclude_files, overwrite, not no_strict, add_predefined_macros,
                         use_full_path, command_style)
@@ -94,7 +131,8 @@ def cli(ctx, infile, outfile, build_dir, exclude_files, no_build, verbose, overw
     else:
         ctx.obj = Options(infile, outfile, build_dir, exclude_files, no_build, verbose, overwrite, not no_strict,
                           add_predefined_macros, use_full_path, command_style)
-
+    # Remove temporary file
+    os.remove(infile)
 
 # Add subcommands
 cli.add_command(make.command)
